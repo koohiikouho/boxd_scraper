@@ -353,27 +353,13 @@ class EnhancedLetterboxdScraper:
                     username = href.strip('/').split('/')[-1]
                     review['username'] = username
 
-            # Extract rating - looking for the specific structure in the HTML
-            rating_elem = container.find('span', class_='rating')
-            if rating_elem:
-                # Check for class-based rating (e.g., rated-8)
-                rating_classes = rating_elem.get('class', [])
-                for cls in rating_classes:
-                    if cls.startswith('rated-'):
-                        rating_value = cls.replace('rated-', '')
-                        review['rating'] = rating_value
-                        break
-
-                # If no class rating, check the text content for stars
-                if not review['rating']:
-                    rating_text = rating_elem.text.strip()
-                    if '★' in rating_text:
-                        star_count = rating_text.count('★')
-                        # Check for half stars
-                        if '½' in rating_text:
-                            review['rating'] = f"{star_count}.5"
-                        else:
-                            review['rating'] = str(star_count)
+            # Extract rating from SVG aria-label: e.g. aria-label="★★★½"
+            rating_svg = container.select_one('svg.glyph.-rating')
+            if rating_svg:
+                label = rating_svg.get('aria-label', '')
+                if '★' in label:
+                    stars = label.count('★')
+                    review['rating'] = f"{stars}.5" if '½' in label else str(stars)
 
             # Extract date
             date_elem = container.find('time', class_='timestamp')
@@ -384,36 +370,18 @@ class EnhancedLetterboxdScraper:
             review_text = self._extract_full_review_text(container)
             review['review_text'] = review_text
 
-            # Extract like count - using the specific structure from HTML
-            like_selectors = [
-                'p.like-link-target',
-                'span._count_x7tgy_22',
-                'a[href*="/likes/"] span'
-            ]
+            # Extract like count from data-count attribute on p.like-link-target
+            like_p = container.select_one('p.like-link-target[data-count]')
+            if like_p:
+                review['likes'] = like_p.get('data-count', '0')
 
-            for selector in like_selectors:
-                like_elem = container.select_one(selector)
-                if like_elem:
-                    like_text = like_elem.text.strip()
-                    if like_text and like_text.lower() != 'no likes yet':
-                        numbers = re.findall(r'[\d,]+', like_text)
-                        if numbers:
-                            review['likes'] = numbers[0].replace(',', '')
-                            break
+            # Extract comment count from the comments link label
+            comment_label = container.select_one('a[href*="#comments"] span.label')
+            if comment_label:
+                review['comments'] = comment_label.text.strip() or '0'
 
-            # Extract comment count
-            comment_elem = container.find('a', class_='icon-comment')
-            if comment_elem:
-                comment_label = comment_elem.find('span', class_='label')
-                if comment_label:
-                    comment_text = comment_label.text.strip()
-                    numbers = re.findall(r'\d+', comment_text)
-                    if numbers:
-                        review['comments'] = numbers[0]
-
-            # Check if review is liked by the user
-            liked_elem = container.find('span', class_='icon-liked')
-            if liked_elem:
+            # Check if the viewer liked this review (filled heart SVG)
+            if container.select_one('svg.inline-liked'):
                 review['user_liked'] = True
 
             # Extract viewing context
