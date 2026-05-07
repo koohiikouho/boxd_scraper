@@ -27,9 +27,10 @@ class EnhancedLetterboxdScraper:
 
         # Setup Chrome options
         chrome_options = uc.ChromeOptions()
-        chrome_options.headless = headless
+        # Do NOT set chrome_options.headless — it can silently force headless in some uc versions.
+        # Pass headless= only via the uc.Chrome() kwarg below.
         if headless:
-            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--window-size=1920,1080")
@@ -56,6 +57,97 @@ class EnhancedLetterboxdScraper:
 
         self.wait = WebDriverWait(self.driver, 15)
         self.review_data = []
+
+    def get_review_count(self, film_url: str) -> int:
+        """
+        Load the film page and extract the total review count directly from
+        the live rendered DOM via Selenium (no BeautifulSoup / page_source).
+
+        Letterboxd stores the count in the film nav tab:
+            <li class="js-route-reviews">
+              <a class="tooltip" title="9,502 reviews">Reviews</a>
+            </li>
+
+        :param film_url: Base film URL, e.g. https://letterboxd.com/film/foo/
+        :return: Total number of reviews, or -1 if not found
+        """
+        import re as _re
+
+        base = film_url.rstrip('/')
+        # The review count is only visible on the /reviews/ page, not the base film page
+        reviews_page = f"{base}/reviews/"
+        self.logger.info(f"Fetching review count from: {reviews_page}")
+        self.driver.get(reviews_page)
+        time.sleep(4)
+
+        # --- Strategy 1: poll until li.js-route-reviews a[title] is non-empty ---
+        # The title attr is populated by JS *after* the element appears, so
+        # presence_of_element_located isn't enough — we must poll for the value.
+        try:
+            def title_is_populated(driver):
+                els = driver.find_elements(By.CSS_SELECTOR, 'li.js-route-reviews a')
+                if els:
+                    t = els[0].get_attribute('title') or ''
+                    return t if _re.search(r'\d', t) else False
+                return False
+
+            title = WebDriverWait(self.driver, 20).until(title_is_populated)
+            self.logger.info(f"Nav tab title attr: {repr(title)}")
+            nums = _re.findall(r'[\d,]+', title)
+            if nums:
+                count = int(nums[0].replace(',', ''))
+                self.logger.info(f"Review count from nav tab: {count}")
+                return count
+        except Exception as e:
+            self.logger.warning(f"Strategy 1 (polling title) failed: {e}")
+
+        # --- Strategy 2: JavaScript getAttribute directly ---
+        try:
+            title = self.driver.execute_script(
+                "var el = document.querySelector('li.js-route-reviews a');"
+                "return el ? el.getAttribute('title') : '';"
+            ) or ''
+            self.logger.info(f"JS getAttribute title: {repr(title)}")
+            nums = _re.findall(r'[\d,]+', title)
+            if nums:
+                count = int(nums[0].replace(',', ''))
+                self.logger.info(f"Review count from JS: {count}")
+                return count
+        except Exception as e:
+            self.logger.warning(f"Strategy 2 (JS getAttribute) failed: {e}")
+
+        # --- Strategy 3: XPath on any <a> whose title contains digits + "reviews" ---
+        try:
+            els = self.driver.find_elements(By.XPATH, "//a[@title]")
+            for el in els:
+                title = el.get_attribute('title') or ''
+                if _re.search(r'\d[\d,]*\s*reviews?', title, _re.I):
+                    nums = _re.findall(r'[\d,]+', title)
+                    if nums:
+                        count = int(nums[0].replace(',', ''))
+                        self.logger.info(f"Review count from XPath sweep: {count}")
+                        return count
+        except Exception as e:
+            self.logger.warning(f"Strategy 3 (XPath sweep) failed: {e}")
+
+        # --- Strategy 4: page source via BeautifulSoup (last resort) ---
+        try:
+            soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+            reviews_li = soup.find('li', class_='js-route-reviews')
+            if reviews_li:
+                a = reviews_li.find('a')
+                if a:
+                    title = a.get('title', '')
+                    nums = _re.findall(r'[\d,]+', title)
+                    if nums:
+                        count = int(nums[0].replace(',', ''))
+                        self.logger.info(f"Review count from BeautifulSoup: {count}")
+                        return count
+        except Exception as e:
+            self.logger.warning(f"Strategy 4 (BeautifulSoup) failed: {e}")
+
+        self.logger.warning("Could not determine review count from any strategy")
+        return -1
 
     def scrape_reviews(self, url: str, max_pages: Optional[int] = None, max_reviews: Optional[int] = None) -> List[
         Dict]:
