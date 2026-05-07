@@ -234,10 +234,14 @@ class EnhancedLetterboxdScraper:
     def _expand_all_reviews(self):
         """Click all 'more' links to expand truncated reviews on the current page using XPath"""
         try:
-            # Use XPath to find all 'more' links more reliably
+            # Use XPath to find all 'more' links more reliably.
+            # Also targets spoiler-reveal links ("I can handle the truth.") which
+            # Letterboxd renders as: <a class="reveal" data-js-trigger="spoiler">I can handle the truth.</a>
             more_xpaths = [
                 "//a[contains(@class, 'reveal') and contains(@data-js-trigger, 'collapsible.expand')]",
                 "//a[contains(@class, 'reveal') and contains(text(), 'more')]",
+                # Spoiler reveal link
+                "//a[contains(@class, 'reveal') and contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'i can handle the truth')]",
                 "//a[@class='reveal']"
             ]
 
